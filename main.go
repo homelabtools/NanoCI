@@ -1,9 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
+	. "github.com/homelabtools/noci/builder"
 	"github.com/juju/errors"
 	"github.com/rs/zerolog/log"
 )
@@ -22,6 +22,6 @@ func main() {
 }
 
 func mainE() error {
-	fmt.Println("Hello")
+	SH("ls -lah")
 	return nil
 }
