@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"reflect"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -24,6 +25,15 @@ func init() {
 func Begin(stages ...*Task) {
 	all := Stage("root", stages...)
 	all.fn()
+}
+
+// InsideDocker runs one or more steps inside a container
+func InsideDocker(imageName string, tasks ...*Task) *Task {
+	task := &Task{}
+	task.fn = func() error {
+		return nil
+	}
+	return task
 }
 
 // SH runs an arbitrary shell command
@@ -200,4 +210,20 @@ func handleError(err error) {
 	msg := errors.ErrorStack(err)
 	log.Error().Msg(msg)
 	os.Exit(1)
+}
+
+func NameOfFunction(function interface{}) (string, error) {
+	error := false
+	name := func() string {
+		defer func() {
+			if err := recover(); err != nil {
+				error = true
+			}
+		}()
+		return runtime.FuncForPC(reflect.ValueOf(function).Pointer()).Name()
+	}()
+	if error {
+		return "", errors.New("argument must be a function")
+	}
+	return name, nil
 }
