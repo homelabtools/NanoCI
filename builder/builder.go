@@ -22,7 +22,7 @@ func init() {
 
 // Begin starts a workflow of stages
 func Begin(stages ...*Task) {
-	all := Stage(stages...)
+	all := Stage("root", stages...)
 	all.fn()
 }
 
@@ -84,16 +84,16 @@ func (t *Task) failureString() string {
 }
 
 // Stage executes a sequence of tasks one after another, failing if any of the tasks fail.
-func Stage(tasks ...*Task) *Task {
+func Stage(name string, tasks ...*Task) *Task {
 	_, fn := buildTaskFunc(func() error {
 		defer recoverError()
 		for _, t := range tasks {
 			err := t.fn()
 			if err != nil && !t.noFailOnError {
 				log.Error().Msgf(t.failureString()+": %s", errors.ErrorStack(err))
-				return errors.Annotatef(err, "task within stage failed")
+				return errors.Annotatef(err, "task within stage '%s' failed", name)
 			} else if err != nil && t.noFailOnError {
-				log.Error().Msgf(t.failureString()+": %s", errors.ErrorStack(err))
+				log.Error().Msgf(t.failureString()+" in stage '%s': %s", name, errors.ErrorStack(err))
 			}
 		}
 		return nil

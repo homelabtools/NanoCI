@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	Begin(Stage( //Parallel(
+	Begin(Stage("my build",
 		Step(func() error {
 			_, _, err := SH("echo task 1; sleep 2; echo task1a; sleep 1; echo task1b")
 			return err
