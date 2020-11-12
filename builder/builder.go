@@ -12,8 +12,19 @@ import (
 	"sync"
 
 	"github.com/juju/errors"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
+
+func init() {
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+}
+
+// Begin starts a workflow of stages
+func Begin(stages ...*Task) {
+	all := Stage(stages...)
+	all.fn()
+}
 
 // SH runs an arbitrary shell command
 func SH(shellCommand string) (string, string, error) {
@@ -51,8 +62,8 @@ func SH(shellCommand string) (string, string, error) {
 	return stdoutContents, stderrContents, nil
 }
 
-// TaskO is a task
-type TaskO struct {
+// Task is a task
+type Task struct {
 	callLocation  string
 	name          string
 	fn            func() error
@@ -60,12 +71,12 @@ type TaskO struct {
 }
 
 // NoFailOnError indicates that a task should not fail if it returns an error
-func (t *TaskO) NoFailOnError() *TaskO {
+func (t *Task) NoFailOnError() *Task {
 	t.noFailOnError = true
 	return t
 }
 
-func (t *TaskO) failureString() string {
+func (t *Task) failureString() string {
 	if t.name == "" {
 		return "Failure in task from " + t.callLocation
 	}
@@ -73,26 +84,29 @@ func (t *TaskO) failureString() string {
 }
 
 // Stage executes a sequence of tasks one after another, failing if any of the tasks fail.
-func Stage(tasks ...*TaskO) error {
-	defer recoverError()
-	for _, t := range tasks {
-		err := t.fn()
-		if err != nil && !t.noFailOnError {
-			log.Error().Msgf(t.failureString()+": %s", errors.ErrorStack(err))
-			return errors.Annotatef(err, "task within stage failed")
-		} else if err != nil && t.noFailOnError {
-			log.Error().Msgf(t.failureString()+": %s", errors.ErrorStack(err))
+func Stage(tasks ...*Task) *Task {
+	_, fn := buildTaskFunc(func() error {
+		defer recoverError()
+		for _, t := range tasks {
+			err := t.fn()
+			if err != nil && !t.noFailOnError {
+				log.Error().Msgf(t.failureString()+": %s", errors.ErrorStack(err))
+				return errors.Annotatef(err, "task within stage failed")
+			} else if err != nil && t.noFailOnError {
+				log.Error().Msgf(t.failureString()+": %s", errors.ErrorStack(err))
+			}
 		}
-	}
-	return nil
+		return nil
+	})
+	return &Task{fn: fn}
 }
 
-// Task executes a function as a task
-//func Task(fn func() error) *TaskO {
-func Task(args ...interface{}) *TaskO {
+// Step executes a function as a task
+//func Step(fn func() error) *Task {
+func Step(args ...interface{}) *Task {
 	defer recoverError()
 	argErrorMsg := "Invalid arguments for the Task function, must be one of:\n[name string, task func() error], [name string, task func()], [task func() error] or [task func()]"
-	task := &TaskO{}
+	task := &Task{}
 	switch len(args) {
 	case 1:
 		isCorrectType, fn := buildTaskFunc(args[0])
@@ -136,12 +150,12 @@ func buildTaskFunc(taskFunc interface{}) (bool, func() error) {
 }
 
 // Parallel runs one or more tasks in parallel
-func Parallel(tasks ...*TaskO) *TaskO {
-	return &TaskO{fn: func() error {
+func Parallel(tasks ...*Task) *Task {
+	return &Task{fn: func() error {
 		wg := sync.WaitGroup{}
 		for _, t := range tasks {
 			wg.Add(1)
-			go func(t *TaskO) {
+			go func(t *Task) {
 				fnErr := t.fn()
 				defer func() {
 					if err := recover(); err != nil {
@@ -177,4 +191,13 @@ func recoverError() {
 		msg = msg[strings.Index(msg, "\n"):]
 		log.Fatal().Msg(msg)
 	}
+}
+
+func handleError(err error) {
+	if err == nil {
+		return
+	}
+	msg := errors.ErrorStack(err)
+	log.Error().Msg(msg)
+	os.Exit(1)
 }
