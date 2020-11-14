@@ -155,7 +155,7 @@ func ProgramizeFunction(offset int, outputSourceDirectory string) error {
 	buf.WriteString("package main\n")
 	buf.Write(importsBlock)
 	buf.WriteString("\n")
-	buf.WriteString("func main() {}\n\n")
+	buf.WriteString("func main() {extractedFunc(nil)}\n\n")
 	buf.WriteString("func extractedFunc")
 	buf.Write(fnSource[4:]) // remove "func" prefix
 	buf.WriteString("\n")
