@@ -5,6 +5,7 @@ import (
 
 	. "github.com/homelabtools/noci/builder"
 	"github.com/homelabtools/noci/codegen"
+	"github.com/juju/errors"
 )
 
 func main() {
@@ -26,10 +27,14 @@ func main() {
 	//))
 	Context(func(m map[string]interface{}) {
 		fmt.Println("🤘")
+		panic(errors.New("newerror"))
 	})
 }
 
 // Context executes a function elsewhere
 func Context(fn interface{}) {
-	codegen.ProgramizeFunction(1, "gen")
+	err := codegen.ProgramizeFunction(1, "gen")
+	if err != nil {
+		panic(err)
+	}
 }

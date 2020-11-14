@@ -1,18 +1,27 @@
 package codegen
 
 import (
+	"bufio"
 	"bytes"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path"
+	"regexp"
 	"runtime"
+	"strconv"
+	"strings"
 
 	"github.com/juju/errors"
+	"github.com/spf13/afero"
 	"golang.org/x/tools/imports"
 )
+
+var fs = afero.NewOsFs()
 
 // extractCallerFunctionArgument extracts the source code of a function argument up the stack.
 // If this function is called with offset 1, it will generate source for the function argument
@@ -47,15 +56,16 @@ import (
 // be used for extracting functions which are self-contained. The passing of parameters should be
 // done with some form of serialization, such as serializing a JSON map.
 //
-func extractCallerFunctionArgument(offset int) (funcText []byte, importsText []byte, err error) {
+func extractCallerFunctionArgument(offset int) (sourcePath string, funcText []byte, importsText []byte, err error) {
 	_, file, lineNum, ok := runtime.Caller(offset + 1)
 	if !ok {
-		return nil, nil, errors.New("failed to get caller info")
+		return file, nil, nil, errors.New("failed to get caller info")
 	}
+	// TODO: logging here
 	//fmt.Printf("%+v, %+v, %+v\n", file, line, ok)
 	source, err := ioutil.ReadFile(file)
 	if err != nil {
-		return nil, nil, errors.Annotatef(err, "failed to read source of '%s'", file)
+		return file, nil, nil, errors.Annotatef(err, "failed to read source of '%s'", file)
 	}
 	// To extract the source, we have to identify which function within the AST corresponds
 	// to the one on the line number of the caller. To do that, we can iterate through the source,
@@ -78,11 +88,12 @@ func extractCallerFunctionArgument(offset int) (funcText []byte, importsText []b
 			lineStartsAt = i
 		}
 	}
+	// TODO: logging here
 	//fmt.Printf("Line %d starts at offset %d and ends at %d\n", line, lineStartsAt, lineEndsAt)
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "callersource.go", source, 0)
 	if err != nil {
-		return nil, nil, errors.Annotatef(err, "failed to parse source of '%s'", file)
+		return "", nil, nil, errors.Annotatef(err, "failed to parse source of '%s'", file)
 	}
 	// Given that we have the starting and ending positions in the file of the desired line of code,
 	// we can search for the function whose start position is after the start position of the line
@@ -99,6 +110,7 @@ func extractCallerFunctionArgument(offset int) (funcText []byte, importsText []b
 				if numMatches > 1 {
 					return false
 				}
+				// TODO: logging here
 				//fmt.Printf("%+v, %+v\n", x.Pos(), x.End())
 				funcText = source[start : end-1]
 				return true
@@ -107,7 +119,7 @@ func extractCallerFunctionArgument(offset int) (funcText []byte, importsText []b
 		return true
 	})
 	if numMatches != 1 {
-		return nil, nil, errors.Errorf("expected to find only 1 function on line %d, instead found %d", lineNum, numMatches)
+		return file, nil, nil, errors.Errorf("expected to find only 1 function on line %d, instead found %d", lineNum, numMatches)
 	}
 	buf := &bytes.Buffer{}
 	buf.WriteString("\nimport (\n")
@@ -119,20 +131,24 @@ func extractCallerFunctionArgument(offset int) (funcText []byte, importsText []b
 		buf.WriteString(i.Path.Value + "\n")
 	}
 	buf.WriteString(")\n")
-	return funcText, buf.Bytes(), nil
+	return file, funcText, buf.Bytes(), nil
 }
 
 // ProgramizeFunction extracts the source code of an anonymous function that was passed into the
 // calling function and turns it into its own, separate executable program.
 func ProgramizeFunction(offset int, outputSourceDirectory string) error {
-	fnSource, importsBlock, err := extractCallerFunctionArgument(offset + 1)
+	filename, fnSource, importsBlock, err := extractCallerFunctionArgument(offset + 1)
 	if err != nil {
 		errors.Annotatef(err, "failed to extract function argument")
 	}
-	path := path.Join(outputSourceDirectory, "main.go")
-	file, err := os.Create(path)
+	err = os.MkdirAll(outputSourceDirectory, 0755)
 	if err != nil {
-		errors.Annotatef(err, "failed to create new source file at '%s'", path)
+		return errors.Trace(err)
+	}
+	outputFile := path.Join(outputSourceDirectory, "main.go")
+	file, err := os.Create(outputFile)
+	if err != nil {
+		errors.Annotatef(err, "failed to create new source file at '%s'", outputFile)
 	}
 	defer file.Close()
 	buf := bytes.Buffer{}
@@ -141,12 +157,130 @@ func ProgramizeFunction(offset int, outputSourceDirectory string) error {
 	buf.WriteString("\n")
 	buf.WriteString("func main() {}\n\n")
 	buf.WriteString("func extractedFunc")
-	buf.Write(fnSource[4:])
+	buf.Write(fnSource[4:]) // remove "func" prefix
 	buf.WriteString("\n")
-	formatted, err := imports.Process(path, buf.Bytes(), nil)
+	formatted, err := imports.Process(outputFile, buf.Bytes(), nil)
 	if err != nil {
 		return errors.Annotate(err, "failed running goimports on generated code")
 	}
 	_, err = file.Write(formatted)
-	return errors.Annotatef(err, "failed writing generated code to disk at '%s'", path)
+	if err != nil {
+		return errors.Annotatef(err, "failed writing generated code to disk at '%s'", outputFile)
+	}
+	dir := path.Dir(filename)
+	modFile := path.Join(dir, "go.mod")
+	exists, err := afero.Exists(fs, modFile)
+	if err != nil {
+		return errors.Annotatef(err, "failed trying to detect go.mod")
+	}
+	if !exists {
+		return errors.Errorf("programization requires use of Go modules, need a go.mod file in '%s'", dir)
+	}
+	newModFile := path.Join(outputSourceDirectory, "go.mod")
+	err = processLineByLine(modFile, newModFile, func(line *string, lineNum int) *string {
+		if lineNum == 1 {
+			parts := strings.Split(*line, " ")
+			newLine := fmt.Sprintf("module main\nreplace %s => ../\n", parts[1])
+			return &newLine
+		}
+		return line
+	})
+	err = compile(outputSourceDirectory)
+	if err != nil {
+		errors.Annotatef(err, "failed to compile code in '%s'", outputSourceDirectory)
+	}
+	return nil
+}
+
+func compile(sourceDirectory string) error {
+	cmd := exec.Command("go", "build", ".")
+	cmd.Dir = sourceDirectory
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	if err == nil {
+		// TODO: logging here
+		return nil
+	}
+	// Mapping of filename to a "set" of line numbers where there are unused imports.
+	// Line numbers are a map for efficient lookup as a set
+	unusedImports := map[string]map[int]interface{}{}
+	re := regexp.MustCompile(`(.*):(\d)+:\d+.*imported and not used: ".*"`)
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		line := scanner.Text()
+		match := re.FindAllStringSubmatch(line, -1)
+		if match != nil {
+			file := match[0][1]
+			lineNum, _ := strconv.Atoi(match[0][2]) // err can be ignored since regex ensures an integer
+			if _, ok := unusedImports[file]; !ok {
+				unusedImports[file] = map[int]interface{}{}
+			}
+			// Store nil since the map is only being used as a set
+			unusedImports[file][lineNum] = nil
+		}
+	}
+	// Rewrite file without unused imports
+	for filename, lineNums := range unusedImports {
+		srcPath := path.Join(sourceDirectory, filename)
+		fileText, err := ioutil.ReadFile(srcPath)
+		if err != nil {
+			return errors.Annotatef(err, "failed reading generated source file '%s'", filename)
+		}
+		newFile, err := os.Create(srcPath)
+		if err != nil {
+			return errors.Annotatef(err, "failed post-processing source file '%s'", filename)
+		}
+		defer newFile.Close()
+		scanner := bufio.NewScanner(bytes.NewReader(fileText))
+		currentLineNum := 0
+		for scanner.Scan() {
+			currentLineNum++
+			// If this line is found in the list of unused imports, skip and do not write it back out
+			if _, ok := lineNums[currentLineNum]; ok {
+				continue
+			}
+			line := scanner.Text()
+			_, err := newFile.WriteString(line + "\n")
+			if err != nil {
+				return errors.Annotatef(err, "failed writing post-processed source file '%s', filename")
+			}
+		}
+	}
+	cmd = exec.Command("go", "build", ".")
+	cmd.Dir = sourceDirectory
+	err = cmd.Run()
+	if err != nil {
+		// TODO: logging here
+		return errors.Annotatef(err, "failed to compile generated source in '%s'", sourceDirectory)
+	}
+	return nil
+}
+
+func processLineByLine(sourceFile, destFile string, process func(line *string, lineNum int) *string) error {
+	data, err := ioutil.ReadFile(sourceFile)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	file, err := os.Create(destFile)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Text()
+		newLine := process(&line, lineNum)
+		if newLine == nil {
+			continue
+		}
+		_, err := file.WriteString(*newLine + "\n")
+		if err != nil {
+			return errors.Annotatef(err, "failed processing file '%s'", sourceFile)
+		}
+	}
+	return nil
 }
