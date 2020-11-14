@@ -36,7 +36,7 @@ func InsideDocker(imageName string, tasks ...*Task) *Task {
 	return task
 }
 
-// SH runs an arbitrary shell command
+// SH runs an arbitrary shell commanear
 func SH(shellCommand string) (string, string, error) {
 	cmd := exec.Command("sh", "-c", shellCommand)
 	stdout, err := cmd.StdoutPipe()
