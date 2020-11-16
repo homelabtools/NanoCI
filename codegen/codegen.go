@@ -3,7 +3,6 @@ package codegen
 import (
 	"bufio"
 	"bytes"
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -14,16 +13,14 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
-	"strings"
 
 	"github.com/juju/errors"
 	"github.com/spf13/afero"
-	"golang.org/x/tools/imports"
 )
 
 var fs = afero.NewOsFs()
 
-// extractCallerFunctionArgument extracts the source code of a function argument up the stack.
+// ExtractAnonymousFuncSource extracts the source code of an anonymous function argument.
 // If this function is called with offset 1, it will generate source for the function argument
 // passed into the caller's method. For example, given the following code:
 //
@@ -39,7 +36,7 @@ var fs = afero.NewOsFs()
 //     }
 //
 //     func Foo(func() error) {
-//     	   funcText, importBlock := extractCallerFunctionArgument(1)
+//     	   funcText, importBlock := ExtractAnonymousFuncSource(1)
 //     }
 //
 // The contents of funcText would be:
@@ -48,24 +45,21 @@ var fs = afero.NewOsFs()
 //         fmt.Println(x+2)
 //     }
 //
-// And the contents of importBlock would be:
-//     import "fmt"
-//
 // Note that there is no variable capture here, it extracts source only. Any variables captured
 // by the function argument will be meaningless in the extracted source. Thus, this should only
 // be used for extracting functions which are self-contained. The passing of parameters should be
 // done with some form of serialization, such as serializing a JSON map.
 //
-func extractCallerFunctionArgument(offset int) (sourcePath string, funcText []byte, importsText []byte, err error) {
+func ExtractAnonymousFuncSource(offset int) (filename string, lineNum int, funcText string, err error) {
 	_, file, lineNum, ok := runtime.Caller(offset + 1)
 	if !ok {
-		return file, nil, nil, errors.New("failed to get caller info")
+		return file, lineNum, "", errors.New("failed to get caller info")
 	}
 	// TODO: logging here
 	//fmt.Printf("%+v, %+v, %+v\n", file, line, ok)
 	source, err := ioutil.ReadFile(file)
 	if err != nil {
-		return file, nil, nil, errors.Annotatef(err, "failed to read source of '%s'", file)
+		return file, lineNum, "", errors.Annotatef(err, "failed to read source of '%s'", file)
 	}
 	// To extract the source, we have to identify which function within the AST corresponds
 	// to the one on the line number of the caller. To do that, we can iterate through the source,
@@ -93,7 +87,7 @@ func extractCallerFunctionArgument(offset int) (sourcePath string, funcText []by
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "callersource.go", source, 0)
 	if err != nil {
-		return "", nil, nil, errors.Annotatef(err, "failed to parse source of '%s'", file)
+		return "", lineNum, "", errors.Annotatef(err, "failed to parse source of '%s'", file)
 	}
 	// Given that we have the starting and ending positions in the file of the desired line of code,
 	// we can search for the function whose start position is after the start position of the line
@@ -112,84 +106,75 @@ func extractCallerFunctionArgument(offset int) (sourcePath string, funcText []by
 				}
 				// TODO: logging here
 				//fmt.Printf("%+v, %+v\n", x.Pos(), x.End())
-				funcText = source[start : end-1]
+				funcText = string(source[start : end-1])
 				return true
 			}
 		}
 		return true
 	})
 	if numMatches != 1 {
-		return file, nil, nil, errors.Errorf("expected to find only 1 function on line %d, instead found %d", lineNum, numMatches)
+		return file, lineNum, "", errors.Errorf("expected to find only 1 function on line %d, instead found %d", lineNum, numMatches)
 	}
-	buf := &bytes.Buffer{}
-	buf.WriteString("\nimport (\n")
-	for _, i := range f.Imports {
-		buf.WriteString("    ")
-		if i.Name != nil {
-			buf.WriteString(i.Name.Name + " ")
-		}
-		buf.WriteString(i.Path.Value + "\n")
-	}
-	buf.WriteString(")\n")
-	return file, funcText, buf.Bytes(), nil
+	return file, lineNum, funcText, nil
 }
 
 // ProgramizeFunction extracts the source code of an anonymous function that was passed into the
 // calling function and turns it into its own, separate executable program.
 func ProgramizeFunction(offset int, outputSourceDirectory string) error {
-	filename, fnSource, importsBlock, err := extractCallerFunctionArgument(offset + 1)
-	if err != nil {
-		errors.Annotatef(err, "failed to extract function argument")
-	}
-	err = os.MkdirAll(outputSourceDirectory, 0755)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	outputFile := path.Join(outputSourceDirectory, "main.go")
-	file, err := os.Create(outputFile)
-	if err != nil {
-		errors.Annotatef(err, "failed to create new source file at '%s'", outputFile)
-	}
-	defer file.Close()
-	buf := bytes.Buffer{}
-	buf.WriteString("package main\n")
-	buf.Write(importsBlock)
-	buf.WriteString("\n")
-	buf.WriteString("func main() {extractedFunc(nil)}\n\n")
-	buf.WriteString("func extractedFunc")
-	buf.Write(fnSource[4:]) // remove "func" prefix
-	buf.WriteString("\n")
-	formatted, err := imports.Process(outputFile, buf.Bytes(), nil)
-	if err != nil {
-		return errors.Annotate(err, "failed running goimports on generated code")
-	}
-	_, err = file.Write(formatted)
-	if err != nil {
-		return errors.Annotatef(err, "failed writing generated code to disk at '%s'", outputFile)
-	}
-	dir := path.Dir(filename)
-	modFile := path.Join(dir, "go.mod")
-	exists, err := afero.Exists(fs, modFile)
-	if err != nil {
-		return errors.Annotatef(err, "failed trying to detect go.mod")
-	}
-	if !exists {
-		return errors.Errorf("programization requires use of Go modules, need a go.mod file in '%s'", dir)
-	}
-	newModFile := path.Join(outputSourceDirectory, "go.mod")
-	err = processLineByLine(modFile, newModFile, func(line *string, lineNum int) *string {
-		if lineNum == 1 {
-			parts := strings.Split(*line, " ")
-			newLine := fmt.Sprintf("module main\nreplace %s => ../\n", parts[1])
-			return &newLine
-		}
-		return line
-	})
-	err = compile(outputSourceDirectory)
-	if err != nil {
-		errors.Annotatef(err, "failed to compile code in '%s'", outputSourceDirectory)
-	}
 	return nil
+	//filename, fnSource, err := extractClosureSource(offset + 1)
+	//if err != nil {
+	//	errors.Annotatef(err, "failed to extract function argument")
+	//}
+	//err = os.MkdirAll(outputSourceDirectory, 0755)
+	//if err != nil {
+	//	return errors.Trace(err)
+	//}
+	//outputFile := path.Join(outputSourceDirectory, "main.go")
+	//file, err := os.Create(outputFile)
+	//if err != nil {
+	//	errors.Annotatef(err, "failed to create new source file at '%s'", outputFile)
+	//}
+	//defer file.Close()
+	//buf := bytes.Buffer{}
+	//buf.WriteString("package main\n")
+	//buf.Write(importsBlock)
+	//buf.WriteString("\n")
+	//buf.WriteString("func main() {extractedFunc(nil)}\n\n")
+	//buf.WriteString("func extractedFunc")
+	//buf.Write(fnSource[4:]) // remove "func" prefix
+	//buf.WriteString("\n")
+	//formatted, err := imports.Process(outputFile, buf.Bytes(), nil)
+	//if err != nil {
+	//	return errors.Annotate(err, "failed running goimports on generated code")
+	//}
+	//_, err = file.Write(formatted)
+	//if err != nil {
+	//	return errors.Annotatef(err, "failed writing generated code to disk at '%s'", outputFile)
+	//}
+	//dir := path.Dir(filename)
+	//modFile := path.Join(dir, "go.mod")
+	//exists, err := afero.Exists(fs, modFile)
+	//if err != nil {
+	//	return errors.Annotatef(err, "failed trying to detect go.mod")
+	//}
+	//if !exists {
+	//	return errors.Errorf("programization requires use of Go modules, need a go.mod file in '%s'", dir)
+	//}
+	//newModFile := path.Join(outputSourceDirectory, "go.mod")
+	//err = processLineByLine(modFile, newModFile, func(line *string, lineNum int) *string {
+	//	if lineNum == 1 {
+	//		parts := strings.Split(*line, " ")
+	//		newLine := fmt.Sprintf("module main\nreplace %s => ../\n", parts[1])
+	//		return &newLine
+	//	}
+	//	return line
+	//})
+	//err = compile(outputSourceDirectory)
+	//if err != nil {
+	//	errors.Annotatef(err, "failed to compile code in '%s'", outputSourceDirectory)
+	//}
+	//return nil
 }
 
 func compile(sourceDirectory string) error {

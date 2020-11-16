@@ -3,11 +3,14 @@ package main
 import (
 	"fmt"
 
+	"github.com/homelabtools/noci/builder"
 	. "github.com/homelabtools/noci/builder"
-	"github.com/homelabtools/noci/codegen"
+	"github.com/homelabtools/noci/mirror"
+	"github.com/k0kubun/pp"
 )
 
 func main() {
+	builder.Main()
 	Step("", func() {})
 	//Begin(Stage("my build",
 	//	Step(func() error {
@@ -24,15 +27,35 @@ func main() {
 	//		return err
 	//	}),
 	//))
-	Context(func(m map[string]interface{}) {
-		fmt.Println("🤘")
-	})
+	//Context(func(m map[string]interface{}) {
+	//	fmt.Println("🤘")
+	//})
+	//Context(foo)
+	//Context(A.B)
+	pp.Println(mirror.FuncInfo(func() {}))
+	pp.Println(mirror.FuncInfo(foo))
+	pp.Println(mirror.FuncInfo(A.B))
+}
+
+func foo(args map[string]interface{}) {
+	fmt.Println("🤘")
+}
+
+type A struct {
+}
+
+func (A) B() {
+	fmt.Println("B")
 }
 
 // Context executes a function elsewhere
 func Context(fn interface{}) {
-	err := codegen.ProgramizeFunction(1, "gen")
-	if err != nil {
-		panic(err)
-	}
 }
+
+//// Context executes a function elsewhere
+//func Context(fn interface{}) {
+//	err := codegen.ProgramizeFunction(1, "gen")
+//	if err != nil {
+//		panic(err)
+//	}
+//}

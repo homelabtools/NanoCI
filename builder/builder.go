@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"reflect"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -19,6 +18,9 @@ import (
 
 func init() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+}
+
+func Main() {
 }
 
 // Begin starts a workflow of stages
@@ -210,20 +212,4 @@ func handleError(err error) {
 	msg := errors.ErrorStack(err)
 	log.Error().Msg(msg)
 	os.Exit(1)
-}
-
-func NameOfFunction(function interface{}) (string, error) {
-	error := false
-	name := func() string {
-		defer func() {
-			if err := recover(); err != nil {
-				error = true
-			}
-		}()
-		return runtime.FuncForPC(reflect.ValueOf(function).Pointer()).Name()
-	}()
-	if error {
-		return "", errors.New("argument must be a function")
-	}
-	return name, nil
 }
