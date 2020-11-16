@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 
-	"github.com/homelabtools/noci/builder"
-	. "github.com/homelabtools/noci/builder"
-	"github.com/homelabtools/noci/mirror"
+	"github.com/homelabtools/nanoci/builder"
+	. "github.com/homelabtools/nanoci/builder"
+	"github.com/homelabtools/nanoci/mirror"
 	"github.com/k0kubun/pp"
 )
 

@@ -1,4 +1,4 @@
-module github.com/homelabtools/noci
+module github.com/homelabtools/nanoci
 
 go 1.15
 

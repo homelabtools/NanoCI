@@ -6,8 +6,8 @@ import (
 	"runtime"
 	"unicode"
 
-	"github.com/homelabtools/noci/codegen"
-	"github.com/homelabtools/noci/regex"
+	"github.com/homelabtools/nanoci/codegen"
+	"github.com/homelabtools/nanoci/regex"
 	"github.com/juju/errors"
 )
 
