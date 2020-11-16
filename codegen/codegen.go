@@ -15,6 +15,7 @@ import (
 	"strconv"
 
 	"github.com/juju/errors"
+	"github.com/otiai10/copy"
 	"github.com/spf13/afero"
 )
 
@@ -240,6 +241,15 @@ func compile(sourceDirectory string) error {
 	if err != nil {
 		// TODO: logging here
 		return errors.Annotatef(err, "failed to compile generated source in '%s'", sourceDirectory)
+	}
+	return nil
+}
+
+// CloneModule copies project source from one place to another
+func CloneModule(sourceDir, destDir string) error {
+	err := copy.Copy(sourceDir, destDir)
+	if err != nil {
+		return errors.Annotatef(err, "failed to copy CI module directory from '%s' to '%s'", sourceDir, destDir)
 	}
 	return nil
 }

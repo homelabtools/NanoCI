@@ -24,11 +24,11 @@ type FunctionInfo struct {
 	IsAnonymous bool
 	IsMethod    bool
 	IsPrivate   bool
-	// Source code of anonymous, only valid if IsAnonymous is true
+	// Source code of anonymous function, only valid if IsAnonymous is true
 	Source string
-	// File name of anonymous, only valid if IsAnonymous is true
+	// File name of anonymous function, only valid if IsAnonymous is true
 	FileName string
-	// Line number of anonymous, only valid if IsAnonymous is true
+	// Line number of anonymous function, only valid if IsAnonymous is true
 	LineNumber int
 }
 
