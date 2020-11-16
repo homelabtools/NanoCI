@@ -243,29 +243,3 @@ func compile(sourceDirectory string) error {
 	}
 	return nil
 }
-
-func processLineByLine(sourceFile, destFile string, process func(line *string, lineNum int) *string) error {
-	data, err := ioutil.ReadFile(sourceFile)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	file, err := os.Create(destFile)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Text()
-		newLine := process(&line, lineNum)
-		if newLine == nil {
-			continue
-		}
-		_, err := file.WriteString(*newLine + "\n")
-		if err != nil {
-			return errors.Annotatef(err, "failed processing file '%s'", sourceFile)
-		}
-	}
-	return nil
-}
