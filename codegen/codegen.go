@@ -3,7 +3,6 @@ package codegen
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -24,64 +23,86 @@ import (
 
 var fs = afero.NewOsFs()
 
-// ProgramizeFunction extracts the source code of an anonymous function that was passed into the
-// calling function and turns it into its own, separate executable program.
-//func ProgramizeFunction(offset int, outputSourceDirectory string) error {
-//return nil
-//filename, fnSource, err := extractClosureSource(offset + 1)
-//if err != nil {
-//	errors.Annotatef(err, "failed to extract function argument")
-//}
-//err = os.MkdirAll(outputSourceDirectory, 0755)
-//if err != nil {
-//	return errors.Trace(err)
-//}
-//outputFile := path.Join(outputSourceDirectory, "main.go")
-//file, err := os.Create(outputFile)
-//if err != nil {
-//	errors.Annotatef(err, "failed to create new source file at '%s'", outputFile)
-//}
-//defer file.Close()
-//buf := bytes.Buffer{}
-//buf.WriteString("package main\n")
-//buf.Write(importsBlock)
-//buf.WriteString("\n")
-//buf.WriteString("func main() {extractedFunc(nil)}\n\n")
-//buf.WriteString("func extractedFunc")
-//buf.Write(fnSource[4:]) // remove "func" prefix
-//buf.WriteString("\n")
-//formatted, err := imports.Process(outputFile, buf.Bytes(), nil)
-//if err != nil {
-//	return errors.Annotate(err, "failed running goimports on generated code")
-//}
-//_, err = file.Write(formatted)
-//if err != nil {
-//	return errors.Annotatef(err, "failed writing generated code to disk at '%s'", outputFile)
-//}
-//dir := path.Dir(filename)
-//modFile := path.Join(dir, "go.mod")
-//exists, err := afero.Exists(fs, modFile)
-//if err != nil {
-//	return errors.Annotatef(err, "failed trying to detect go.mod")
-//}
-//if !exists {
-//	return errors.Errorf("programization requires use of Go modules, need a go.mod file in '%s'", dir)
-//}
-//newModFile := path.Join(outputSourceDirectory, "go.mod")
-//err = processLineByLine(modFile, newModFile, func(line *string, lineNum int) *string {
-//	if lineNum == 1 {
-//		parts := strings.Split(*line, " ")
-//		newLine := fmt.Sprintf("module main\nreplace %s => ../\n", parts[1])
-//		return &newLine
-//	}
-//	return line
-//})
-//err = compile(outputSourceDirectory)
-//if err != nil {
-//	errors.Annotatef(err, "failed to compile code in '%s'", outputSourceDirectory)
-//}
-//return nil
-//}
+// ProgramizeFunction creates a separate program that runs the specified function.
+func ProgramizeFunction(fi *mirror.FunctionInfo) (*Program, error) {
+	dir, err := ioutil.TempDir("", "nanobuild-func-"+fi.FullName)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return ProgramizeFunctionAt(fi, dir)
+}
+
+// ProgramizeFunctionAt creates a separate program that runs the specified function.
+// The source is generated and built in the specified directory.
+func ProgramizeFunctionAt(fi *mirror.FunctionInfo, dir string) (*Program, error) {
+	p := &Program{}
+	p.Directory = dir
+	// TODO: walk the dir to find go.mod
+	sourceDir := path.Dir(fi.FileName)
+	err := copyBuilderModule(sourceDir, p.Directory)
+	if err != nil {
+		return nil, errors.Annotatef(err, "unable to create program for function")
+	}
+	name := path.Join(p.Directory, path.Base(fi.FileName))
+	file, err := os.OpenFile(name, os.O_APPEND|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, errors.Annotatef(err, "unable to generate program for function")
+	}
+	str := "\n" + "func " + fi.Name + fi.Source[4:] + "\n"
+	_, err = file.WriteString(str)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	file.Close()
+	mainCode := fmt.Sprintf(`
+	// GENERATED
+	import "encoding/json"
+	import "os"
+
+	func main() {
+		genStdinData, genErr := ioutil.ReadAll(os.Stdin)
+		if genErr != nil {
+			fmt.Println("unable to read stdin for program arguments: " + genErr.Error())
+			os.Exit(1)
+		}
+		genArgs := Args{}
+		if len(genStdinData) > 0 {
+			genErr = json.Unmarshal(genStdinData, &genArgs)
+			if genErr != nil {
+				fmt.Println("unable to unmarshal JSON data from stdin: " + genErr.Error())
+				os.Exit(1)
+			}
+		}
+		genErr = %s(genArgs)
+		if genErr != nil {
+			fmt.Println(genErr)
+			os.Exit(1)
+		}
+		os.Exit(0)
+		// GENERATED
+	`, fi.Name)
+	err = textfile.RewriteLineByLineInPlace(name, func(line *string, lineNum int) *string {
+		if strings.Contains(*line, "func main()") {
+			return &mainCode
+		}
+		return line
+	})
+	if err != nil {
+		return nil, errors.Annotatef(err, "failed to insert nanofunc call")
+	}
+
+	p.BinFileName = fmt.Sprintf("%s_line_%d", fi.FullName, fi.LineNumber)
+	p.FullPath = path.Join(p.Directory, p.BinFileName)
+	err = compile(p.Directory, p.BinFileName)
+	if err != nil {
+		if err, ok := err.(*exec.ExitError); ok {
+			return nil, errors.Annotatef(err, "failed to compile function '%+v':\n%s", fi, string(err.Stderr))
+		}
+		return nil, errors.Annotatef(err, "failed to compile function '%+v'", fi)
+	}
+	log.Debug().Msgf("created function program at '%s'", p.Directory)
+	return p, nil
+}
 
 func compile(sourceDirectory, binName string) error {
 	cmd := exec.Command("goimports", "-w", ".")
@@ -159,8 +180,8 @@ func compile(sourceDirectory, binName string) error {
 	return nil
 }
 
-// CloneModule copies project source from one place to another
-func CloneModule(sourceDir, destDir string) error {
+// copyBuilderModule copies project source from one place to another
+func copyBuilderModule(sourceDir, destDir string) error {
 	err := os.RemoveAll(destDir)
 	if err != nil {
 		return errors.Annotatef(err, "failed to clean up generated program dir")
@@ -176,6 +197,9 @@ func CloneModule(sourceDir, destDir string) error {
 	destPath, err := filepath.EvalSymlinks(destDir)
 	if err != nil {
 		return errors.Trace(err)
+	}
+	if destPath == sourcePath {
+		return errors.Errorf("cannot copy '%s' into '%s' as they are the same", sourcePath, destPath)
 	}
 	if strings.Contains(destPath, sourcePath) {
 		return errors.Errorf("cannot copy '%s' into '%s' as the latter is a subdirectory of the former", sourcePath, destPath)
@@ -193,112 +217,4 @@ func CloneModule(sourceDir, destDir string) error {
 		return errors.Annotatef(err, "failed to copy CI module directory from '%s' to '%s'", sourceDir, destDir)
 	}
 	return nil
-}
-
-// CreateProgramFromFunction creates a separate program that runs the specified function.
-func CreateProgramFromFunction(fi *mirror.FunctionInfo) (*Program, error) {
-	dir, err := ioutil.TempDir("", "nanobuild-func-"+fi.FullName)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	return CreateProgramFromFunctionAt(fi, dir)
-}
-
-// CreateProgramFromFunctionAt creates a separate program that runs the specified function.
-// The source is generated and built in the specified directory.
-func CreateProgramFromFunctionAt(fi *mirror.FunctionInfo, dir string) (*Program, error) {
-	p := &Program{}
-	p.Directory = dir
-	// TODO: walk the dir to find go.mod
-	sourceDir := path.Dir(fi.FileName)
-	err := CloneModule(sourceDir, p.Directory)
-	if err != nil {
-		return nil, errors.Annotatef(err, "unable to create program for function")
-	}
-	name := path.Join(p.Directory, path.Base(fi.FileName))
-	file, err := os.OpenFile(name, os.O_APPEND|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, errors.Annotatef(err, "unable to generate program for function")
-	}
-	str := "\n" + "func " + fi.Name + fi.Source[4:] + "\n"
-	_, err = file.WriteString(str)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	file.Close()
-	mainCode := fmt.Sprintf(`
-	// GENERATED
-	import "encoding/json"
-	import "os"
-
-	func main() {
-		genStdinData, genErr := ioutil.ReadAll(os.Stdin)
-		if genErr != nil {
-			fmt.Println("unable to read stdin for program arguments: " + genErr.Error())
-			os.Exit(1)
-		}
-		genArgs := Args{}
-		if len(genStdinData) > 0 {
-			genErr = json.Unmarshal(genStdinData, &genArgs)
-			if genErr != nil {
-				fmt.Println("unable to unmarshal JSON data from stdin: " + genErr.Error())
-				os.Exit(1)
-			}
-		}
-		genErr = %s(genArgs)
-		if genErr != nil {
-			fmt.Println(genErr)
-			os.Exit(1)
-		}
-		os.Exit(0)
-		// GENERATED
-	`, fi.Name)
-	err = textfile.RewriteLineByLineInPlace(name, func(line *string, lineNum int) *string {
-		if strings.Contains(*line, "func main()") {
-			return &mainCode
-		}
-		return line
-	})
-	if err != nil {
-		return nil, errors.Annotatef(err, "failed to insert nanofunc call")
-	}
-
-	p.BinFileName = fmt.Sprintf("%s_line_%d", fi.FullName, fi.LineNumber)
-	p.FullPath = path.Join(p.Directory, p.BinFileName)
-	err = compile(p.Directory, p.BinFileName)
-	if err != nil {
-		return nil, errors.Annotatef(err, "failed to compile generated program")
-	}
-	log.Debug().Msgf("created function program at '%s'", p.Directory)
-	return p, nil
-}
-
-// Program represents some external temporary program.
-type Program struct {
-	FuncInfo    *mirror.FunctionInfo
-	Cmd         *exec.Cmd
-	BinFileName string
-	FullPath    string
-	Directory   string
-}
-
-// Remove cleans up the program and deletes it from disk.
-func (p *Program) Remove() {
-	err := os.RemoveAll(p.Directory)
-	if err != nil {
-		log.Error().Msgf("failed to clean up temporary program in directory '%s'", p.Directory)
-	}
-}
-
-// Run runs the program and blocks until it is completed.
-func (p *Program) Run(args interface{}) error {
-	argData, err := json.Marshal(args)
-	if err != nil {
-		return errors.Annotatef(err, "failed to marshal args for generated program")
-	}
-	cmd := exec.Command(p.FullPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = bytes.NewReader(argData)
-	return cmd.Run()
 }

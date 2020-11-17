@@ -1,10 +1,12 @@
 package mirror
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/ioutil"
+	"path"
 	"reflect"
 	"regexp"
 	"runtime"
@@ -33,6 +35,13 @@ type FunctionInfo struct {
 	FileName string
 	// Line number of anonymous function, only valid if IsAnonymous is true
 	LineNumber int
+}
+
+func (fi *FunctionInfo) String() string {
+	if fi.IsAnonymous {
+		return fmt.Sprintf("%s@%s:%d", fi.FullName, path.Base(fi.FileName), fi.LineNumber)
+	}
+	return fi.FullName
 }
 
 // NameOfFunction returns the name of a function, or an error if the argument is not a function.
