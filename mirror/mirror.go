@@ -50,7 +50,7 @@ func NameOfFunction(function interface{}) (string, error) {
 }
 
 // FuncInfo retrieves function information using reflection.
-func FuncInfo(function interface{}) (*FunctionInfo, error) {
+func FuncInfo(function interface{}, offset int) (*FunctionInfo, error) {
 	name, err := NameOfFunction(function)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -65,7 +65,7 @@ func FuncInfo(function interface{}) (*FunctionInfo, error) {
 		// Anonymouss/anonymous functions take the name pkg.pkg.funcN where n is some number > 0
 		if fi.PackageName == fi.StructName && anonymousNameRegex.MatchString(fi.Name) {
 			fi.IsAnonymous = true
-			fi.FileName, fi.LineNumber, fi.Source, err = codegen.ExtractAnonymousFuncSource(1)
+			fi.FileName, fi.LineNumber, fi.Source, err = codegen.ExtractAnonymousFuncSource(offset + 1)
 			if err != nil {
 				return nil, errors.Annotatef(err, "failed extracting source code of anonymous")
 			}

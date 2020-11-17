@@ -5,8 +5,6 @@ import (
 
 	"github.com/homelabtools/nanoci/builder"
 	. "github.com/homelabtools/nanoci/builder"
-	"github.com/homelabtools/nanoci/mirror"
-	"github.com/k0kubun/pp"
 )
 
 func main() {
@@ -32,9 +30,6 @@ func main() {
 	//})
 	//Context(foo)
 	//Context(A.B)
-	pp.Println(mirror.FuncInfo(func() {}))
-	pp.Println(mirror.FuncInfo(foo))
-	pp.Println(mirror.FuncInfo(A.B))
 }
 
 func foo(args map[string]interface{}) {

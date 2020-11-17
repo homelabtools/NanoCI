@@ -11,16 +11,32 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/homelabtools/nanoci/mirror"
 	"github.com/juju/errors"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
+// Args is an alias for map[string]interface{}, which is used to pass arguments to a ContextFunc via JSON serialization
+type Args = map[string]interface{}
+
+// ContextFunc is a function that can run in some external context, such as inside a Docker container or a VM
+type ContextFunc func(Args) error
+
+// Context represents an external environment in which a ContextFunc is run, such as a Docker container or a VM
+type Context struct {
+	fn       ContextFunc
+	TaskFunc func() error
+	funcInfo *mirror.FunctionInfo
+}
+
 func init() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 }
 
+// Main is the setup function that should be called be builder.go's main function
 func Main() {
+	log.Info().Msg("Starting build")
 }
 
 // Begin starts a workflow of stages
@@ -29,49 +45,26 @@ func Begin(stages ...*Task) {
 	all.fn()
 }
 
-// InsideDocker runs one or more steps inside a container
-func InsideDocker(imageName string, tasks ...*Task) *Task {
-	task := &Task{}
-	task.fn = func() error {
-		return nil
+// ExternalProcess runs a ContextFunc in another process
+func ExternalProcess(fn ContextFunc) *Context {
+	fi, err := mirror.FuncInfo(fn, 1)
+	if err != nil {
+		panic(err)
 	}
-	return task
+	var taskFn func() error
+	return &Context{
+		funcInfo: fi,
+		fn:       fn,
+		TaskFunc: taskFn,
+	}
 }
 
-// SH runs an arbitrary shell commanear
-func SH(shellCommand string) (string, string, error) {
-	cmd := exec.Command("sh", "-c", shellCommand)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", "", errors.Trace(err)
+// Inside runs one or more steps inside some context
+func Inside(context *Context) *Task {
+	task := &Task{
+		fn: context.TaskFunc,
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return "", "", errors.Trace(err)
-	}
-	stdoutBuf := &bytes.Buffer{}
-	stderrBuf := &bytes.Buffer{}
-	stdoutTee := io.TeeReader(stdout, stdoutBuf)
-	stderrTee := io.TeeReader(stderr, stderrBuf)
-	err = cmd.Start()
-	if err != nil {
-		return "", "", errors.Trace(err)
-	}
-	go io.Copy(os.Stdout, stdoutTee)
-	go io.Copy(os.Stderr, stderrTee)
-	err = cmd.Wait()
-	stdoutContents := strings.TrimSpace(string(stdoutBuf.Bytes()))
-	stderrContents := strings.TrimSpace(string(stderrBuf.Bytes()))
-	if err != nil {
-		return "", "", errors.Trace(err)
-	}
-	if err != nil {
-		if e, ok := err.(*exec.ExitError); ok {
-			return stdoutContents, stderrContents, errors.Annotatef(err, "Command '%s' failed with exit code %d", shellCommand, e.ProcessState.ExitCode())
-		}
-		return stdoutContents, stderrContents, errors.Trace(err)
-	}
-	return stdoutContents, stderrContents, nil
+	return task
 }
 
 // Task is a task
@@ -212,4 +205,40 @@ func handleError(err error) {
 	msg := errors.ErrorStack(err)
 	log.Error().Msg(msg)
 	os.Exit(1)
+}
+
+// SH runs an arbitrary shell commanear
+func SH(shellCommand string) (string, string, error) {
+	cmd := exec.Command("sh", "-c", shellCommand)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", "", errors.Trace(err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", "", errors.Trace(err)
+	}
+	stdoutBuf := &bytes.Buffer{}
+	stderrBuf := &bytes.Buffer{}
+	stdoutTee := io.TeeReader(stdout, stdoutBuf)
+	stderrTee := io.TeeReader(stderr, stderrBuf)
+	err = cmd.Start()
+	if err != nil {
+		return "", "", errors.Trace(err)
+	}
+	go io.Copy(os.Stdout, stdoutTee)
+	go io.Copy(os.Stderr, stderrTee)
+	err = cmd.Wait()
+	stdoutContents := strings.TrimSpace(string(stdoutBuf.Bytes()))
+	stderrContents := strings.TrimSpace(string(stderrBuf.Bytes()))
+	if err != nil {
+		return "", "", errors.Trace(err)
+	}
+	if err != nil {
+		if e, ok := err.(*exec.ExitError); ok {
+			return stdoutContents, stderrContents, errors.Annotatef(err, "Command '%s' failed with exit code %d", shellCommand, e.ProcessState.ExitCode())
+		}
+		return stdoutContents, stderrContents, errors.Trace(err)
+	}
+	return stdoutContents, stderrContents, nil
 }

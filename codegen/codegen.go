@@ -121,62 +121,62 @@ func ExtractAnonymousFuncSource(offset int) (filename string, lineNum int, funcT
 
 // ProgramizeFunction extracts the source code of an anonymous function that was passed into the
 // calling function and turns it into its own, separate executable program.
-func ProgramizeFunction(offset int, outputSourceDirectory string) error {
-	return nil
-	//filename, fnSource, err := extractClosureSource(offset + 1)
-	//if err != nil {
-	//	errors.Annotatef(err, "failed to extract function argument")
-	//}
-	//err = os.MkdirAll(outputSourceDirectory, 0755)
-	//if err != nil {
-	//	return errors.Trace(err)
-	//}
-	//outputFile := path.Join(outputSourceDirectory, "main.go")
-	//file, err := os.Create(outputFile)
-	//if err != nil {
-	//	errors.Annotatef(err, "failed to create new source file at '%s'", outputFile)
-	//}
-	//defer file.Close()
-	//buf := bytes.Buffer{}
-	//buf.WriteString("package main\n")
-	//buf.Write(importsBlock)
-	//buf.WriteString("\n")
-	//buf.WriteString("func main() {extractedFunc(nil)}\n\n")
-	//buf.WriteString("func extractedFunc")
-	//buf.Write(fnSource[4:]) // remove "func" prefix
-	//buf.WriteString("\n")
-	//formatted, err := imports.Process(outputFile, buf.Bytes(), nil)
-	//if err != nil {
-	//	return errors.Annotate(err, "failed running goimports on generated code")
-	//}
-	//_, err = file.Write(formatted)
-	//if err != nil {
-	//	return errors.Annotatef(err, "failed writing generated code to disk at '%s'", outputFile)
-	//}
-	//dir := path.Dir(filename)
-	//modFile := path.Join(dir, "go.mod")
-	//exists, err := afero.Exists(fs, modFile)
-	//if err != nil {
-	//	return errors.Annotatef(err, "failed trying to detect go.mod")
-	//}
-	//if !exists {
-	//	return errors.Errorf("programization requires use of Go modules, need a go.mod file in '%s'", dir)
-	//}
-	//newModFile := path.Join(outputSourceDirectory, "go.mod")
-	//err = processLineByLine(modFile, newModFile, func(line *string, lineNum int) *string {
-	//	if lineNum == 1 {
-	//		parts := strings.Split(*line, " ")
-	//		newLine := fmt.Sprintf("module main\nreplace %s => ../\n", parts[1])
-	//		return &newLine
-	//	}
-	//	return line
-	//})
-	//err = compile(outputSourceDirectory)
-	//if err != nil {
-	//	errors.Annotatef(err, "failed to compile code in '%s'", outputSourceDirectory)
-	//}
-	//return nil
-}
+//func ProgramizeFunction(offset int, outputSourceDirectory string) error {
+//return nil
+//filename, fnSource, err := extractClosureSource(offset + 1)
+//if err != nil {
+//	errors.Annotatef(err, "failed to extract function argument")
+//}
+//err = os.MkdirAll(outputSourceDirectory, 0755)
+//if err != nil {
+//	return errors.Trace(err)
+//}
+//outputFile := path.Join(outputSourceDirectory, "main.go")
+//file, err := os.Create(outputFile)
+//if err != nil {
+//	errors.Annotatef(err, "failed to create new source file at '%s'", outputFile)
+//}
+//defer file.Close()
+//buf := bytes.Buffer{}
+//buf.WriteString("package main\n")
+//buf.Write(importsBlock)
+//buf.WriteString("\n")
+//buf.WriteString("func main() {extractedFunc(nil)}\n\n")
+//buf.WriteString("func extractedFunc")
+//buf.Write(fnSource[4:]) // remove "func" prefix
+//buf.WriteString("\n")
+//formatted, err := imports.Process(outputFile, buf.Bytes(), nil)
+//if err != nil {
+//	return errors.Annotate(err, "failed running goimports on generated code")
+//}
+//_, err = file.Write(formatted)
+//if err != nil {
+//	return errors.Annotatef(err, "failed writing generated code to disk at '%s'", outputFile)
+//}
+//dir := path.Dir(filename)
+//modFile := path.Join(dir, "go.mod")
+//exists, err := afero.Exists(fs, modFile)
+//if err != nil {
+//	return errors.Annotatef(err, "failed trying to detect go.mod")
+//}
+//if !exists {
+//	return errors.Errorf("programization requires use of Go modules, need a go.mod file in '%s'", dir)
+//}
+//newModFile := path.Join(outputSourceDirectory, "go.mod")
+//err = processLineByLine(modFile, newModFile, func(line *string, lineNum int) *string {
+//	if lineNum == 1 {
+//		parts := strings.Split(*line, " ")
+//		newLine := fmt.Sprintf("module main\nreplace %s => ../\n", parts[1])
+//		return &newLine
+//	}
+//	return line
+//})
+//err = compile(outputSourceDirectory)
+//if err != nil {
+//	errors.Annotatef(err, "failed to compile code in '%s'", outputSourceDirectory)
+//}
+//return nil
+//}
 
 func compile(sourceDirectory string) error {
 	cmd := exec.Command("go", "build", ".")
@@ -247,7 +247,14 @@ func compile(sourceDirectory string) error {
 
 // CloneModule copies project source from one place to another
 func CloneModule(sourceDir, destDir string) error {
-	err := copy.Copy(sourceDir, destDir)
+	ok, err := afero.Exists(fs, path.Join(sourceDir, ".git"))
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if !ok {
+		return errors.Errorf("builder cannot be at the root of a git repo, please place your builder code in a subdirectory of your choosing")
+	}
+	err = copy.Copy(sourceDir, destDir)
 	if err != nil {
 		return errors.Annotatef(err, "failed to copy CI module directory from '%s' to '%s'", sourceDir, destDir)
 	}
