@@ -217,7 +217,7 @@ func CreateProgramFromFunctionAt(fi *mirror.FunctionInfo, dir string) (*Program,
 	file.Close()
 	err = textfile.RewriteLineByLineInPlace(name, func(line *string, lineNum int) *string {
 		if strings.Contains(*line, "BuilderMain()") {
-			newLine := *line + "\n	BuilderExit(nanofunc(nil))\n"
+			newLine := *line + "\n// GENERATED\nBuilderExit(nanofunc(nil))\n// GENERATED\n"
 			return &newLine
 		}
 		return line
@@ -226,7 +226,7 @@ func CreateProgramFromFunctionAt(fi *mirror.FunctionInfo, dir string) (*Program,
 		return nil, errors.Annotatef(err, "failed to insert nanofunc call")
 	}
 
-	cmd := exec.Command("goimports")
+	cmd := exec.Command("goimports", "-w", ".")
 	cmd.Dir = p.Directory
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
