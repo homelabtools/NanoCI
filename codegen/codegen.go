@@ -263,7 +263,7 @@ func CreateProgramFromFunctionAt(fi *mirror.FunctionInfo, dir string) (*Program,
 		return nil, errors.Annotatef(err, "failed to insert nanofunc call")
 	}
 
-	p.BinFileName = "nanofunc"
+	p.BinFileName = fmt.Sprintf("%s_line_%d", fi.FullName, fi.LineNumber)
 	p.FullPath = path.Join(p.Directory, p.BinFileName)
 	err = compile(p.Directory, p.BinFileName)
 	if err != nil {

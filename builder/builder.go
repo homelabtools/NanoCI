@@ -62,6 +62,7 @@ func ExternalProcess(fn ContextFunc) *Context {
 	wd, _ := os.Getwd()
 	taskFn := func(args Args) error {
 		p, err := codegen.CreateProgramFromFunctionAt(fi, path.Join(wd, "..", "func"))
+		//p, err := codegen.CreateProgramFromFunction(fi)
 		if err != nil {
 			return errors.Trace(err)
 		}
