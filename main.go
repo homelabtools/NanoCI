@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	builder.Main()
+	builder.BuilderMain()
 	Step("", func() {})
 	//Begin(Stage("my build",
 	//	Step(func() error {

@@ -3,121 +3,24 @@ package codegen
 import (
 	"bufio"
 	"bytes"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io/ioutil"
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
+	"strings"
 
+	"github.com/homelabtools/nanoci/mirror"
+	"github.com/homelabtools/nanoci/textfile"
 	"github.com/juju/errors"
 	"github.com/otiai10/copy"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
 
 var fs = afero.NewOsFs()
-
-// ExtractAnonymousFuncSource extracts the source code of an anonymous function argument.
-// If this function is called with offset 1, it will generate source for the function argument
-// passed into the caller's method. For example, given the following code:
-//
-//     package main
-//
-//     import "fmt"
-//
-//     func main() {
-//         Foo(func() error {
-//             x := 1
-//             fmt.Println(x+2)
-//         })
-//     }
-//
-//     func Foo(func() error) {
-//     	   funcText, importBlock := ExtractAnonymousFuncSource(1)
-//     }
-//
-// The contents of funcText would be:
-//     func() error {
-//         x := 1
-//         fmt.Println(x+2)
-//     }
-//
-// Note that there is no variable capture here, it extracts source only. Any variables captured
-// by the function argument will be meaningless in the extracted source. Thus, this should only
-// be used for extracting functions which are self-contained. The passing of parameters should be
-// done with some form of serialization, such as serializing a JSON map.
-//
-func ExtractAnonymousFuncSource(offset int) (filename string, lineNum int, funcText string, err error) {
-	_, file, lineNum, ok := runtime.Caller(offset + 1)
-	if !ok {
-		return file, lineNum, "", errors.New("failed to get caller info")
-	}
-	// TODO: logging here
-	//fmt.Printf("%+v, %+v, %+v\n", file, line, ok)
-	source, err := ioutil.ReadFile(file)
-	if err != nil {
-		return file, lineNum, "", errors.Annotatef(err, "failed to read source of '%s'", file)
-	}
-	// To extract the source, we have to identify which function within the AST corresponds
-	// to the one on the line number of the caller. To do that, we can iterate through the source,
-	// byte by byte, until the desired line number is found. Then we can keep moving until we find
-	// the next line. Now we have the start and end location in the file of that line. When searching
-	// through the AST below, we'll check the start position of each function and look for
-	// the one that starts after lineStartsAt and before lineEndsAt.
-	lc := 1
-	lineStartsAt := 0
-	lineEndsAt := 0
-	for i, b := range source {
-		if b == '\n' {
-			lc++
-			if lineStartsAt > 0 {
-				lineEndsAt = i
-				break
-			}
-		}
-		if lc == lineNum && lineStartsAt == 0 {
-			lineStartsAt = i
-		}
-	}
-	// TODO: logging here
-	//fmt.Printf("Line %d starts at offset %d and ends at %d\n", line, lineStartsAt, lineEndsAt)
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "callersource.go", source, 0)
-	if err != nil {
-		return "", lineNum, "", errors.Annotatef(err, "failed to parse source of '%s'", file)
-	}
-	// Given that we have the starting and ending positions in the file of the desired line of code,
-	// we can search for the function whose start position is after the start position of the line
-	// but before the line's ending position. This will work as long as there is only one function
-	// on that line.
-	numMatches := 0
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.FuncLit:
-			start := int(x.Pos()) - 1
-			end := int(x.End())
-			if start >= lineStartsAt && start < lineEndsAt {
-				numMatches++
-				if numMatches > 1 {
-					return false
-				}
-				// TODO: logging here
-				//fmt.Printf("%+v, %+v\n", x.Pos(), x.End())
-				funcText = string(source[start : end-1])
-				return true
-			}
-		}
-		return true
-	})
-	if numMatches != 1 {
-		return file, lineNum, "", errors.Errorf("expected to find only 1 function on line %d, instead found %d", lineNum, numMatches)
-	}
-	return file, lineNum, funcText, nil
-}
 
 // ProgramizeFunction extracts the source code of an anonymous function that was passed into the
 // calling function and turns it into its own, separate executable program.
@@ -178,8 +81,8 @@ func ExtractAnonymousFuncSource(offset int) (filename string, lineNum int, funcT
 //return nil
 //}
 
-func compile(sourceDirectory string) error {
-	cmd := exec.Command("go", "build", ".")
+func compile(sourceDirectory, binName string) error {
+	cmd := exec.Command("go", "build", ".", "-o", binName)
 	cmd.Dir = sourceDirectory
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
@@ -247,11 +150,31 @@ func compile(sourceDirectory string) error {
 
 // CloneModule copies project source from one place to another
 func CloneModule(sourceDir, destDir string) error {
+	err := os.RemoveAll(destDir)
+	if err != nil {
+		return errors.Annotatef(err, "failed to clean up generated program dir")
+	}
+	err = os.MkdirAll(destDir, 0777)
+	if err != nil {
+		return errors.Annotatef(err, "failed to create generated program dir")
+	}
+	sourcePath, err := filepath.EvalSymlinks(sourceDir)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	destPath, err := filepath.EvalSymlinks(destDir)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if strings.Contains(destPath, sourcePath) {
+		return errors.Errorf("cannot copy '%s' into '%s' as the latter is a subdirectory of the former", sourcePath, destPath)
+	}
+	log.Debug().Msgf("Copying '%s' to '%s", sourceDir, destDir)
 	ok, err := afero.Exists(fs, path.Join(sourceDir, ".git"))
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if !ok {
+	if ok {
 		return errors.Errorf("builder cannot be at the root of a git repo, please place your builder code in a subdirectory of your choosing")
 	}
 	err = copy.Copy(sourceDir, destDir)
@@ -259,4 +182,90 @@ func CloneModule(sourceDir, destDir string) error {
 		return errors.Annotatef(err, "failed to copy CI module directory from '%s' to '%s'", sourceDir, destDir)
 	}
 	return nil
+}
+
+// CreateProgramFromFunction creates a separate program that runs the specified function.
+func CreateProgramFromFunction(fi *mirror.FunctionInfo) (*Program, error) {
+	dir, err := ioutil.TempDir("", "nanobuild-func-"+fi.FullName)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return CreateProgramFromFunctionAt(fi, dir)
+}
+
+// CreateProgramFromFunctionAt creates a separate program that runs the specified function.
+// The source is generated and built in the specified directory.
+func CreateProgramFromFunctionAt(fi *mirror.FunctionInfo, dir string) (*Program, error) {
+	p := &Program{}
+	p.Directory = dir
+	// TODO: walk the dir to find go.mod
+	sourceDir := path.Dir(fi.FileName)
+	err := CloneModule(sourceDir, p.Directory)
+	if err != nil {
+		return nil, errors.Annotatef(err, "unable to create program for function")
+	}
+	name := path.Join(p.Directory, path.Base(fi.FileName))
+	file, err := os.OpenFile(name, os.O_APPEND|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, errors.Annotatef(err, "unable to generate program for function")
+	}
+	str := "\n" + "func nanofunc" + fi.Source[4:] + "\n"
+	_, err = file.WriteString(str)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	file.Close()
+	err = textfile.RewriteLineByLineInPlace(name, func(line *string, lineNum int) *string {
+		if strings.Contains(*line, "BuilderMain()") {
+			newLine := *line + "\n	BuilderExit(nanofunc(nil))\n"
+			return &newLine
+		}
+		return line
+	})
+	if err != nil {
+		return nil, errors.Annotatef(err, "failed to insert nanofunc call")
+	}
+
+	cmd := exec.Command("goimports")
+	cmd.Dir = p.Directory
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
+	if err != nil {
+		return nil, errors.Annotatef(err, "failed to run goimports on generated source")
+	}
+
+	p.BinFileName = "nanofunc"
+	p.FullPath = path.Join(p.Directory, p.BinFileName)
+	err = compile(p.Directory, p.BinFileName)
+	if err != nil {
+		return nil, errors.Annotatef(err, "failed to compile generated program")
+	}
+	log.Debug().Msgf("created function program at '%s'", p.Directory)
+	return p, nil
+}
+
+// Program represents some external temporary program.
+type Program struct {
+	FuncInfo    *mirror.FunctionInfo
+	Cmd         *exec.Cmd
+	BinFileName string
+	FullPath    string
+	Directory   string
+}
+
+// Remove cleans up the program and deletes it from disk.
+func (p *Program) Remove() {
+	err := os.RemoveAll(p.Directory)
+	if err != nil {
+		log.Error().Msgf("failed to clean up temporary program in directory '%s'", p.Directory)
+	}
+}
+
+// Run runs the program and blocks until it is completed.
+func (p *Program) Run() error {
+	cmd := exec.Command(p.FullPath, "--func", p.FuncInfo.FullName)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }

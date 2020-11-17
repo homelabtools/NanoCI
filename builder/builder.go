@@ -6,11 +6,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
 
+	"github.com/homelabtools/nanoci/codegen"
 	"github.com/homelabtools/nanoci/mirror"
 	"github.com/juju/errors"
 	"github.com/rs/zerolog"
@@ -34,9 +36,16 @@ func init() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 }
 
-// Main is the setup function that should be called be builder.go's main function
-func Main() {
+// BuilderMain is the setup function that should be called be builder.go's main function
+func BuilderMain() {
 	log.Info().Msg("Starting build")
+}
+
+func BuilderExit(err error) {
+	if err != nil {
+		panic(err)
+	}
+	os.Exit(0)
 }
 
 // Begin starts a workflow of stages
@@ -51,7 +60,15 @@ func ExternalProcess(fn ContextFunc) *Context {
 	if err != nil {
 		panic(err)
 	}
-	var taskFn func() error
+	wd, _ := os.Getwd()
+	taskFn := func() error {
+		_, err := codegen.CreateProgramFromFunctionAt(fi, path.Join(wd, "..", "func"))
+		if err != nil {
+			return err
+		}
+		//p.Run()
+		return nil
+	}
 	return &Context{
 		funcInfo: fi,
 		fn:       fn,

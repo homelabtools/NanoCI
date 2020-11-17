@@ -12,4 +12,5 @@ require (
 	github.com/spf13/afero v1.4.1
 	golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f // indirect
 	golang.org/x/text v0.3.4 // indirect
+	golang.org/x/tools v0.0.0-20201117021029-3c3a81204b10 // indirect
 )
