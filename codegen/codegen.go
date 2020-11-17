@@ -3,6 +3,8 @@ package codegen
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -82,13 +84,22 @@ var fs = afero.NewOsFs()
 //}
 
 func compile(sourceDirectory, binName string) error {
-	cmd := exec.Command("go", "build", ".", "-o", binName)
+	cmd := exec.Command("goimports", "-w", ".")
+	cmd.Dir = sourceDirectory
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	if err != nil {
+		return errors.Annotatef(err, "failed to run goimports on generated source")
+	}
+	buildArgs := []string{"build", "-o", binName, "."}
+	cmd = exec.Command("go", buildArgs...)
 	cmd.Dir = sourceDirectory
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	if err == nil {
 		// TODO: logging here
 		return nil
@@ -138,7 +149,7 @@ func compile(sourceDirectory, binName string) error {
 			}
 		}
 	}
-	cmd = exec.Command("go", "build", ".")
+	cmd = exec.Command("go", buildArgs...)
 	cmd.Dir = sourceDirectory
 	err = cmd.Run()
 	if err != nil {
@@ -209,30 +220,47 @@ func CreateProgramFromFunctionAt(fi *mirror.FunctionInfo, dir string) (*Program,
 	if err != nil {
 		return nil, errors.Annotatef(err, "unable to generate program for function")
 	}
-	str := "\n" + "func nanofunc" + fi.Source[4:] + "\n"
+	str := "\n" + "func " + fi.Name + fi.Source[4:] + "\n"
 	_, err = file.WriteString(str)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	file.Close()
+	mainCode := fmt.Sprintf(`
+	// GENERATED
+	import "encoding/json"
+	import "os"
+
+	func main() {
+		genStdinData, genErr := ioutil.ReadAll(os.Stdin)
+		if genErr != nil {
+			fmt.Println("unable to read stdin for program arguments: " + genErr.Error())
+			os.Exit(1)
+		}
+		genArgs := Args{}
+		if len(genStdinData) > 0 {
+			genErr = json.Unmarshal(genStdinData, &genArgs)
+			if genErr != nil {
+				fmt.Println("unable to unmarshal JSON data from stdin: " + genErr.Error())
+				os.Exit(1)
+			}
+		}
+		genErr = %s(genArgs)
+		if genErr != nil {
+			fmt.Println(genErr)
+			os.Exit(1)
+		}
+		os.Exit(0)
+		// GENERATED
+	`, fi.Name)
 	err = textfile.RewriteLineByLineInPlace(name, func(line *string, lineNum int) *string {
-		if strings.Contains(*line, "BuilderMain()") {
-			newLine := *line + "\n// GENERATED\nBuilderExit(nanofunc(nil))\n// GENERATED\n"
-			return &newLine
+		if strings.Contains(*line, "func main()") {
+			return &mainCode
 		}
 		return line
 	})
 	if err != nil {
 		return nil, errors.Annotatef(err, "failed to insert nanofunc call")
-	}
-
-	cmd := exec.Command("goimports", "-w", ".")
-	cmd.Dir = p.Directory
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err = cmd.Run()
-	if err != nil {
-		return nil, errors.Annotatef(err, "failed to run goimports on generated source")
 	}
 
 	p.BinFileName = "nanofunc"
@@ -263,9 +291,14 @@ func (p *Program) Remove() {
 }
 
 // Run runs the program and blocks until it is completed.
-func (p *Program) Run() error {
-	cmd := exec.Command(p.FullPath, "--func", p.FuncInfo.FullName)
+func (p *Program) Run(args interface{}) error {
+	argData, err := json.Marshal(args)
+	if err != nil {
+		return errors.Annotatef(err, "failed to marshal args for generated program")
+	}
+	cmd := exec.Command(p.FullPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Stdin = bytes.NewReader(argData)
 	return cmd.Run()
 }

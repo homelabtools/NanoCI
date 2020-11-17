@@ -28,7 +28,7 @@ type ContextFunc func(Args) error
 // Context represents an external environment in which a ContextFunc is run, such as a Docker container or a VM
 type Context struct {
 	fn       ContextFunc
-	TaskFunc func() error
+	TaskFunc func(Args) error
 	funcInfo *mirror.FunctionInfo
 }
 
@@ -38,7 +38,6 @@ func init() {
 
 // BuilderMain is the setup function that should be called be builder.go's main function
 func BuilderMain() {
-	log.Info().Msg("Starting build")
 }
 
 func BuilderExit(err error) {
@@ -61,13 +60,13 @@ func ExternalProcess(fn ContextFunc) *Context {
 		panic(err)
 	}
 	wd, _ := os.Getwd()
-	taskFn := func() error {
-		_, err := codegen.CreateProgramFromFunctionAt(fi, path.Join(wd, "..", "func"))
+	taskFn := func(args Args) error {
+		p, err := codegen.CreateProgramFromFunctionAt(fi, path.Join(wd, "..", "func"))
 		if err != nil {
-			return err
+			return errors.Trace(err)
 		}
-		//p.Run()
-		return nil
+		//defer p.Remove()
+		return errors.Trace(p.Run(args))
 	}
 	return &Context{
 		funcInfo: fi,
@@ -76,10 +75,12 @@ func ExternalProcess(fn ContextFunc) *Context {
 	}
 }
 
-// Inside runs one or more steps inside some context
-func Inside(context *Context) *Task {
+// Inside runs something inside another context, like a container or a VM
+func Inside(context *Context, args Args) *Task {
 	task := &Task{
-		fn: context.TaskFunc,
+		fn: func() error {
+			return context.TaskFunc(args)
+		},
 	}
 	return task
 }
