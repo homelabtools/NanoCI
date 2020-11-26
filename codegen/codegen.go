@@ -38,17 +38,17 @@ func ProgramizeFunctionAt(fi *mirror.FunctionInfo, dir string) (*Program, error)
 	p := &Program{}
 	p.Directory = dir
 	// TODO: walk the dir to find go.mod
-	sourceDir := path.Dir(fi.FileName)
+	sourceDir := path.Dir(fi.Anonymous.FileName)
 	err := copyBuilderModule(sourceDir, p.Directory)
 	if err != nil {
 		return nil, errors.Annotatef(err, "unable to create program for function")
 	}
-	name := path.Join(p.Directory, path.Base(fi.FileName))
+	name := path.Join(p.Directory, path.Base(fi.Anonymous.FileName))
 	file, err := os.OpenFile(name, os.O_APPEND|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, errors.Annotatef(err, "unable to generate program for function")
 	}
-	str := "\n" + "func " + fi.Name + fi.Source[4:] + "\n"
+	str := "\n" + "func " + fi.Name + fi.Anonymous.Source[4:] + "\n"
 	_, err = file.WriteString(str)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -91,7 +91,7 @@ func ProgramizeFunctionAt(fi *mirror.FunctionInfo, dir string) (*Program, error)
 		return nil, errors.Annotatef(err, "failed to insert nanofunc call")
 	}
 
-	p.BinFileName = fmt.Sprintf("%s_line_%d", fi.FullName, fi.LineNumber)
+	p.BinFileName = fmt.Sprintf("%s_line_%d", fi.FullName, fi.Anonymous.LineNumber)
 	p.FullPath = path.Join(p.Directory, p.BinFileName)
 	err = compile(p.Directory, p.BinFileName)
 	if err != nil {

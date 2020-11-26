@@ -26,20 +26,26 @@ type FunctionInfo struct {
 	PackageName string
 	StructName  string
 	Name        string
-	IsAnonymous bool
 	IsMethod    bool
 	IsPrivate   bool
-	// Source code of anonymous function, only valid if IsAnonymous is true
-	Source string
-	// File name of anonymous function, only valid if IsAnonymous is true
-	FileName string
-	// Line number of anonymous function, only valid if IsAnonymous is true
+	Anonymous   *AnonymousInfo
+}
+
+// AnonymousInfo has additional attributes for functions that are anonymous
+type AnonymousInfo struct {
+	Source     string
+	FileName   string
 	LineNumber int
 }
 
+// IsAnonymous returns whether or not the FunctionInfo represents an anonymous function
+func (fi *FunctionInfo) IsAnonymous() bool {
+	return fi.Anonymous != nil
+}
+
 func (fi *FunctionInfo) String() string {
-	if fi.IsAnonymous {
-		return fmt.Sprintf("%s@%s:%d", fi.FullName, path.Base(fi.FileName), fi.LineNumber)
+	if fi.IsAnonymous() {
+		return fmt.Sprintf("%s@%s:%d", fi.FullName, path.Base(fi.Anonymous.FileName), fi.Anonymous.LineNumber)
 	}
 	return fi.FullName
 }
@@ -76,8 +82,8 @@ func FuncInfo(function interface{}, offset int) (*FunctionInfo, error) {
 	} else if fi.PackageName, fi.StructName, fi.Name, ok = regex.Capture3(methodRegex, name); ok {
 		// Anonymouss/anonymous functions take the name pkg.pkg.funcN where n is some number > 0
 		if fi.PackageName == fi.StructName && anonymousNameRegex.MatchString(fi.Name) {
-			fi.IsAnonymous = true
-			fi.FileName, fi.LineNumber, fi.Source, err = ExtractAnonymousFuncSource(offset + 1)
+			fi.Anonymous = &AnonymousInfo{}
+			fi.Anonymous.FileName, fi.Anonymous.LineNumber, fi.Anonymous.Source, err = ExtractAnonymousFuncSource(offset + 1)
 			if err != nil {
 				return nil, errors.Annotatef(err, "failed extracting source code of anonymous")
 			}
